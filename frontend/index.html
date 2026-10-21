@@ -1519,7 +1519,7 @@
               <div>
                 <h3 style="margin:0;font-size:16.5px;font-weight:700;">🚨 密码防暴力破解监控引擎 (SecurityGuard)</h3>
                 <p style="margin:4px 0 0;font-size:12px;color:var(--secondary);">
-                  同一 IP 连续密码错误满 <strong id="bf-threshold-val">10</strong> 次，自动通过 Cloudflare 发信至 <strong id="bf-alert-email" style="color:var(--blue);">linminglu238707@gmail.com</strong>
+                  同一 IP 连续密码错误满 <strong id="bf-threshold-val">10</strong> 次，自动通过 Cloudflare 发信至 <strong id="bf-alert-email" style="color:var(--blue);">管理员告警信箱</strong>
                 </p>
               </div>
               <button type="button" class="mini-btn blue" onclick="loadAdminOverview()">🔄 刷新状态</button>
@@ -2109,7 +2109,7 @@
         </div>
         <div>
           <label class="field-label" data-i18n="compose_to">收件人邮箱</label>
-          <div class="glass-input-wrap"><input id="c-to" class="glass-input" type="email" value="linminglu238707@gmail.com" required></div>
+          <div class="glass-input-wrap"><input id="c-to" class="glass-input" type="email" placeholder="请输入收件人邮箱 (如 example@qq.com)" required></div>
         </div>
         <div>
           <label class="field-label" data-i18n="compose_subject">主题</label>
@@ -2157,6 +2157,47 @@
           <button type="submit" class="primary-btn">保存新密码</button>
         </div>
       </form>
+    </section>
+  </div>
+
+  <!-- MODAL 3: Admin Manage Specific Address (JWT & Password Reset) -->
+  <div id="admin-addr-modal" class="modal-backdrop" hidden onclick="if(event.target===this)this.hidden=true">
+    <section class="modal-card liquid">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="margin:0;font-size:18px;font-weight:650;">🛡️ 管理员 · 邮箱凭证与密码管理</h3>
+        <button type="button" class="action-btn" style="padding:4px 10px;" onclick="document.getElementById('admin-addr-modal').hidden=true">✕</button>
+      </div>
+      <div class="field-group">
+        <label class="field-label">目标邮箱地址 (ID: <span id="adm-modal-id"></span>)</label>
+        <div id="adm-modal-email" style="font-family:ui-monospace,monospace;font-weight:700;font-size:16px;color:var(--purple);"></div>
+      </div>
+      <div class="field-group">
+        <label class="field-label">专属 JWT 登录凭证 (/admin/show_password/:id)</label>
+        <div style="display:flex;gap:8px;">
+          <div class="glass-input-wrap" style="flex:1;"><input id="adm-modal-jwt" class="glass-input" type="text" readonly></div>
+          <button type="button" class="action-btn" onclick="navigator.clipboard.writeText(document.getElementById('adm-modal-jwt').value);showToast('✅ 已复制该邮箱的 JWT 凭证')">复制</button>
+        </div>
+      </div>
+      <form onsubmit="handleAdminResetAddrPassword(event)" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line);">
+        <label class="field-label">强制重置该邮箱的独立登录密码 (/admin/address/:id/reset_password)</label>
+        <div style="display:flex;gap:8px;">
+          <div class="glass-input-wrap" style="flex:1;">
+            <input id="adm-modal-newpass" class="glass-input" type="password" placeholder="输入新的邮箱登录密码" minlength="3" required>
+          </div>
+          <button type="submit" class="primary-btn">确认重置密码</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <!-- MODAL 4: Admin View Sendbox Content -->
+  <div id="admin-raw-modal" class="modal-backdrop" hidden onclick="if(event.target===this)this.hidden=true">
+    <section class="modal-card liquid" style="max-width:680px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:17px;font-weight:650;">📤 发件箱邮件原文详情</h3>
+        <button type="button" class="action-btn" style="padding:4px 10px;" onclick="document.getElementById('admin-raw-modal').hidden=true">✕</button>
+      </div>
+      <pre id="admin-raw-modal-pre" class="reader-pre" style="max-height:420px;overflow-y:auto;"></pre>
     </section>
   </div>
 
@@ -2628,6 +2669,25 @@
       }
     }
 
+    // Admin Console State
+    let currentAdminTab = "overview"; // 'overview' | 'addresses' | 'mails' | 'sendbox' | 'security' | 'maintenance'
+    let adminMailSource = "all"; // 'all' | 'unknow'
+    let adminMailOffset = 0;
+    const ADMIN_MAIL_LIMIT = 40;
+    let adminAddrOffset = 0;
+    const ADMIN_ADDR_LIMIT = 20;
+    let adminSendboxCache = [];
+    let currentAdminModalAddrId = null;
+
+    function adminHeaders(isJson = false) {
+      const h = {
+        "x-custom-auth": siteAuth,
+        "x-admin-auth": adminAuth
+      };
+      if (isJson) h["Content-Type"] = "application/json";
+      return h;
+    }
+
     // TOP-LEVEL MODE SWITCHER ('personal' | 'instant' | 'admin')
     window.switchMode = async function(mode) {
       currentMode = mode;
@@ -2637,12 +2697,14 @@
 
       const portal = document.getElementById("personal-auth-portal");
       const adminGate = document.getElementById("admin-gate");
+      const adminConsoleWrap = document.getElementById("admin-console-wrap");
       const inboxContainer = document.getElementById("active-inbox-container");
       const heroDock = document.getElementById("hero-dock");
       const filterInput = document.getElementById("admin-filter-input");
 
       if (mode === "personal") {
         adminGate.hidden = true;
+        adminConsoleWrap.hidden = true;
         filterInput.hidden = true;
         if (!personalMailbox) {
           portal.hidden = false;
@@ -2660,6 +2722,7 @@
       } else if (mode === "instant") {
         portal.hidden = true;
         adminGate.hidden = true;
+        adminConsoleWrap.hidden = true;
         filterInput.hidden = true;
         inboxContainer.hidden = false;
         heroDock.hidden = false;
@@ -2673,18 +2736,793 @@
         }
       } else if (mode === "admin") {
         portal.hidden = true;
-        filterInput.hidden = false;
         if (!adminAuth) {
           adminGate.hidden = false;
+          adminConsoleWrap.hidden = true;
           inboxContainer.hidden = true;
           return;
         }
         adminGate.hidden = true;
-        inboxContainer.hidden = false;
+        adminConsoleWrap.hidden = false;
         heroDock.hidden = true;
         document.getElementById("live-status-pill").hidden = false;
+        await switchAdminTab(currentAdminTab);
+      }
+    };
+
+    // Switch between the 6 Global Admin Console Sub-Tabs
+    window.switchAdminTab = async function(tab) {
+      currentAdminTab = tab;
+      const tabs = ["overview", "addresses", "mails", "sendbox", "security", "maintenance"];
+      tabs.forEach(t => {
+        const btn = document.getElementById(`atab-btn-${t}`);
+        if (btn) btn.classList.toggle("active", t === tab);
+      });
+
+      document.getElementById("admin-panel-overview").hidden = tab !== "overview";
+      document.getElementById("admin-panel-addresses").hidden = tab !== "addresses";
+      document.getElementById("admin-panel-mails-toolbar").hidden = tab !== "mails";
+      document.getElementById("admin-panel-sendbox").hidden = tab !== "sendbox";
+      document.getElementById("admin-panel-security").hidden = tab !== "security";
+      document.getElementById("admin-panel-maintenance").hidden = tab !== "maintenance";
+
+      const inboxContainer = document.getElementById("active-inbox-container");
+      const filterInput = document.getElementById("admin-filter-input");
+      if (tab === "mails") {
+        inboxContainer.hidden = false;
+        filterInput.hidden = false;
         selectedMailId = null;
         await refreshMails(true);
+      } else {
+        inboxContainer.hidden = true;
+        filterInput.hidden = true;
+      }
+
+      if (tab === "overview") await loadAdminOverview();
+      else if (tab === "addresses") await loadAdminAddresses();
+      else if (tab === "sendbox") {
+        await Promise.all([loadAdminSendbox(), loadAdminSenders()]);
+      } else if (tab === "security") await loadAdminSecuritySettings();
+      else if (tab === "maintenance") await loadAdminMaintenanceSettings();
+    };
+
+    window.logoutAdmin = function() {
+      adminAuth = "";
+      sessionStorage.removeItem("cf_mail_admin_auth");
+      showToast("🔒 已锁定全域管理后台");
+      switchMode("personal");
+    };
+
+    window.openAdminComposeModal = function(defaultFrom = "admin@11231632.xyz") {
+      document.getElementById("c-from").value = defaultFrom;
+      document.getElementById("compose-modal").hidden = false;
+    };
+
+    // =========================================================================
+    // ADMIN TAB 1: OVERVIEW, BRUTE-FORCE GUARD & WORKER CONFIGS
+    // =========================================================================
+    window.loadAdminOverview = async function() {
+      if (!adminAuth) return;
+      try {
+        const [statRes, cfgRes, bfRes] = await Promise.all([
+          fetch("/admin/statistics", { headers: adminHeaders() }),
+          fetch("/admin/worker/configs", { headers: adminHeaders() }),
+          fetch("/admin/security_guard/status", { headers: adminHeaders() }).catch(() => null)
+        ]);
+
+        if (statRes && statRes.status === 200) {
+          const st = await statRes.json();
+          document.getElementById("stat-mail-count").textContent = st.mailCount ?? 0;
+          document.getElementById("stat-address-count").textContent = st.addressCount ?? 0;
+          document.getElementById("stat-active-7d").textContent = st.activeAddressCount7days ?? 0;
+          document.getElementById("stat-active-30d").textContent = st.activeAddressCount30days ?? 0;
+          document.getElementById("stat-send-count").textContent = st.sendMailCount ?? 0;
+          document.getElementById("stat-user-count").textContent = st.userCount ?? 0;
+        }
+
+        if (bfRes && bfRes.status === 200) {
+          const bf = await bfRes.json();
+          document.getElementById("bf-threshold-val").textContent = bf.threshold || 10;
+          document.getElementById("bf-alert-email").textContent = bf.alertEmail || "管理员告警信箱";
+          const tbody = document.getElementById("bf-guard-tbody");
+          tbody.innerHTML = "";
+          const items = bf.items || [];
+          if (items.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--green);font-weight:600;padding:18px;">✅ 当前无异常密码试探 IP · 全域防暴破状态健康</td></tr>`;
+          } else {
+            items.forEach(item => {
+              const isAlerted = item.count >= 10;
+              const tr = document.createElement("tr");
+              tr.innerHTML = `
+                <td style="font-family:ui-monospace,monospace;font-weight:700;">${escapeHtml(item.ip)}</td>
+                <td><strong style="color:${isAlerted ? 'var(--red)' : 'var(--ink)'};">${item.count} 次</strong></td>
+                <td>${isAlerted ? '<span class="mode-pill-tag" style="background:rgba(217,45,32,.14);color:var(--red);">🚨 已触发邮件告警</span>' : '<span class="mode-pill-tag blue">监控计数中</span>'}</td>
+                <td>
+                  <div style="display:flex;gap:6px;">
+                    <button type="button" class="mini-btn red" onclick="quickBlockIp('${escapeHtml(item.ip)}')">🚫 加入黑名单</button>
+                    <button type="button" class="mini-btn" onclick="clearBruteForceIp('${escapeHtml(item.ip)}')">🧹 清零计数</button>
+                  </div>
+                </td>
+              `;
+              tbody.appendChild(tr);
+            });
+          }
+        }
+
+        if (cfgRes && cfgRes.status === 200) {
+          const cfg = await cfgRes.json();
+          const grid = document.getElementById("worker-config-grid");
+          grid.innerHTML = "";
+          const entries = [
+            ["VERSION (系统版本)", cfg.VERSION || "v1.13.0"],
+            ["DOMAINS (收信域名)", (cfg.DOMAINS || []).join(", ")],
+            ["DEFAULT_DOMAINS (默认域名)", (cfg.DEFAULT_DOMAINS || []).join(", ")],
+            ["MIN / MAX_ADDRESS_LEN", `${cfg.MIN_ADDRESS_LEN || 1} ~ ${cfg.MAX_ADDRESS_LEN || 32} 字符`],
+            ["HAS_PASSWORD (前端访问密码)", cfg.HAS_PASSWORD ? `已启用 (${cfg.HAS_PASSWORD} 个)` : "未启用"],
+            ["HAS_ADMIN_PASSWORDS (后台管理密码)", cfg.HAS_ADMIN_PASSWORDS ? `已启用 (${cfg.HAS_ADMIN_PASSWORDS} 个)` : "未启用"],
+            ["ENABLE_USER_CREATE_EMAIL", cfg.ENABLE_USER_CREATE_EMAIL ? "✅ 允许创建" : "❌ 禁止"],
+            ["ENABLE_USER_DELETE_EMAIL", cfg.ENABLE_USER_DELETE_EMAIL ? "✅ 允许删除" : "❌ 禁止"],
+            ["ENABLE_MAIL_READ_STATUS", cfg.ENABLE_MAIL_READ_STATUS ? "✅ 已启用已读状态" : "关闭"],
+            ["ENABLE_WEBHOOK", cfg.ENABLE_WEBHOOK ? "✅ 已启用 Webhook" : "关闭"],
+            ["HAS_JWT_SECRET", cfg.HAS_JWT_SECRET ? "✅ 已配置" : "❌ 未配置"],
+            ["COPYRIGHT", cfg.COPYRIGHT || "-"]
+          ];
+          entries.forEach(([k, v]) => {
+            const div = document.createElement("div");
+            div.className = "kv-item";
+            div.innerHTML = `<span class="kv-key">${escapeHtml(k)}</span><span class="kv-val">${escapeHtml(String(v))}</span>`;
+            grid.appendChild(div);
+          });
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    window.clearBruteForceIp = async function(ip) {
+      try {
+        await fetch("/admin/security_guard/clear", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ ip })
+        });
+        showToast(`✅ 已清除 IP ${ip} 的失败计数`);
+        await loadAdminOverview();
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.quickBlockIp = async function(ip) {
+      try {
+        const res = await fetch("/admin/ip_blacklist/settings", { headers: adminHeaders() });
+        const cur = res.status === 200 ? await res.json() : {};
+        const list = Array.isArray(cur.blacklist) ? cur.blacklist : [];
+        if (!list.includes(ip)) list.push(ip);
+        const payload = {
+          enabled: true,
+          blacklist: list,
+          asnBlacklist: Array.isArray(cur.asnBlacklist) ? cur.asnBlacklist : [],
+          fingerprintBlacklist: Array.isArray(cur.fingerprintBlacklist) ? cur.fingerprintBlacklist : [],
+          enableWhitelist: Boolean(cur.enableWhitelist),
+          whitelist: Array.isArray(cur.whitelist) ? cur.whitelist : [],
+          enableDailyLimit: Boolean(cur.enableDailyLimit),
+          dailyRequestLimit: Number(cur.dailyRequestLimit) || 100
+        };
+        const sr = await fetch("/admin/ip_blacklist/settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(payload)
+        });
+        if (sr.status === 200) {
+          showToast(`🚫 已将 IP ${ip} 加入黑名单并开启拦截！`);
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    // =========================================================================
+    // ADMIN TAB 2: ADDRESS MANAGEMENT
+    // =========================================================================
+    window.loadAdminAddresses = async function() {
+      if (!adminAuth) return;
+      const q = (document.getElementById("admin-addr-search")?.value || "").trim();
+      const tbody = document.getElementById("admin-addr-tbody");
+      try {
+        const url = `/admin/address?limit=${ADMIN_ADDR_LIMIT}&offset=${adminAddrOffset}${q ? `&query=${encodeURIComponent(q)}` : ""}`;
+        const res = await fetch(url, { headers: adminHeaders() });
+        if (res.status !== 200) return;
+        const data = await res.json();
+        const list = data.results || [];
+        if (adminAddrOffset === 0 && typeof data.count === "number") {
+          document.getElementById("admin-addr-total-badge").textContent = data.count;
+        }
+        const pageNum = Math.floor(adminAddrOffset / ADMIN_ADDR_LIMIT) + 1;
+        document.getElementById("addr-page-info").textContent = `第 ${pageNum} 页`;
+
+        tbody.innerHTML = "";
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted);">未查询到匹配的邮箱账号</td></tr>`;
+          return;
+        }
+
+        list.forEach(item => {
+          const tr = document.createElement("tr");
+          const created = (item.created_at || "").replace("T", " ").slice(0, 16);
+          const updated = (item.updated_at || "").replace("T", " ").slice(0, 16);
+          const src = item.source_meta || "web";
+          tr.innerHTML = `
+            <td style="font-family:ui-monospace,monospace;color:var(--muted);">#${item.id}</td>
+            <td>
+              <span style="font-family:ui-monospace,monospace;font-weight:700;color:var(--ink);cursor:pointer;" onclick="navigator.clipboard.writeText('${escapeHtml(item.name)}');showToast('✅ 已复制：${escapeHtml(item.name)}')">
+                ${escapeHtml(item.name)}
+              </span>
+            </td>
+            <td><span class="mode-pill-tag ${src === 'admin' ? 'purple' : 'blue'}">${escapeHtml(src)}</span></td>
+            <td><strong style="color:var(--blue);">${item.mail_count ?? 0}</strong> 封</td>
+            <td><strong style="color:var(--green);">${item.send_count ?? 0}</strong> 封</td>
+            <td style="font-variant-numeric:tabular-nums;color:var(--secondary);">${escapeHtml(created)}</td>
+            <td style="font-variant-numeric:tabular-nums;color:var(--secondary);">${escapeHtml(updated)}</td>
+            <td>
+              <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                <button type="button" class="mini-btn blue" onclick="adminViewAddressMails('${escapeHtml(item.name)}')" title="在全域名收件箱中查看该邮箱的邮件">📬 查收件</button>
+                <button type="button" class="mini-btn green" onclick="adminSwitchIntoAddress(${item.id}, '${escapeHtml(item.name)}')" title="以该邮箱身份直接进入收件箱">🚀 切入邮箱</button>
+                <button type="button" class="mini-btn purple" onclick="adminOpenAddrModal(${item.id}, '${escapeHtml(item.name)}')" title="查看 JWT 凭证或重置登录密码">🔑 改密/凭证</button>
+                <button type="button" class="mini-btn" onclick="adminClearInbox(${item.id}, '${escapeHtml(item.name)}')" title="清空该邮箱收件箱">🧹 清空收件</button>
+                <button type="button" class="mini-btn red" onclick="adminDeleteAddress(${item.id}, '${escapeHtml(item.name)}')" title="彻底删除该邮箱账号">🗑️ 删除</button>
+              </div>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.changeAdminAddrPage = function(dir) {
+      const next = adminAddrOffset + dir * ADMIN_ADDR_LIMIT;
+      if (next < 0) return;
+      adminAddrOffset = next;
+      loadAdminAddresses();
+    };
+
+    window.handleAdminCreateAddress = async function(e) {
+      e.preventDefault();
+      const prefix = document.getElementById("admin-new-addr-prefix").value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+      const rawPass = document.getElementById("admin-new-addr-pass").value;
+      if (!prefix) return;
+      try {
+        const res = await fetch("/admin/new_address", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ name: prefix, domain: "11231632.xyz", enablePrefix: false })
+        });
+        if (res.status !== 200) {
+          const msg = await res.text();
+          showToast(`创建失败: ${msg}`);
+          return;
+        }
+        const data = await res.json();
+        if (rawPass && data.jwt) {
+          const passHash = await sha256Hex(rawPass);
+          await fetch("/api/address_change_password", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-custom-auth": siteAuth,
+              "Authorization": `Bearer ${data.jwt}`
+            },
+            body: JSON.stringify({ new_password: passHash })
+          });
+        }
+        document.getElementById("admin-new-addr-prefix").value = "";
+        document.getElementById("admin-new-addr-pass").value = "";
+        showToast(`✅ 已成功创建邮箱：${data.address}${rawPass ? " (已设置独立密码)" : ""}`);
+        adminAddrOffset = 0;
+        await loadAdminAddresses();
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.adminOpenAddrModal = async function(id, email) {
+      currentAdminModalAddrId = id;
+      document.getElementById("adm-modal-id").textContent = id;
+      document.getElementById("adm-modal-email").textContent = email;
+      document.getElementById("adm-modal-jwt").value = "正在获取...";
+      document.getElementById("adm-modal-newpass").value = "";
+      document.getElementById("admin-addr-modal").hidden = false;
+      try {
+        const res = await fetch(`/admin/show_password/${id}`, { headers: adminHeaders() });
+        if (res.status === 200) {
+          const data = await res.json();
+          document.getElementById("adm-modal-jwt").value = data.jwt || "";
+        }
+      } catch (err) {
+        document.getElementById("adm-modal-jwt").value = err.message;
+      }
+    };
+
+    window.handleAdminResetAddrPassword = async function(e) {
+      e.preventDefault();
+      if (!currentAdminModalAddrId) return;
+      const newPass = document.getElementById("adm-modal-newpass").value;
+      if (!newPass) return;
+      try {
+        const passHash = await sha256Hex(newPass);
+        const res = await fetch(`/admin/address/${currentAdminModalAddrId}/reset_password`, {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ password: passHash })
+        });
+        if (res.status === 200) {
+          document.getElementById("adm-modal-newpass").value = "";
+          document.getElementById("admin-addr-modal").hidden = true;
+          showToast("✅ 已成功重置该邮箱的独立登录密码！");
+        } else {
+          showToast("重置密码失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.adminSwitchIntoAddress = async function(id, email) {
+      try {
+        const res = await fetch(`/admin/show_password/${id}`, { headers: adminHeaders() });
+        if (res.status === 200) {
+          const data = await res.json();
+          personalMailbox = { address: email, jwt: data.jwt };
+          sessionStorage.setItem("cf_mail_personal_session", JSON.stringify(personalMailbox));
+          showToast(`🚀 已切入邮箱：${email}`);
+          await switchMode("personal");
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.adminViewAddressMails = async function(email) {
+      adminMailSource = "all";
+      adminMailOffset = 0;
+      document.getElementById("admin-mail-address-query").value = email;
+      await switchAdminTab("mails");
+    };
+
+    window.adminClearInbox = async function(id, email) {
+      if (!confirm(`确定要清空 ${email} 的所有收件箱邮件吗？`)) return;
+      try {
+        const res = await fetch(`/admin/clear_inbox/${id}`, { method: "DELETE", headers: adminHeaders() });
+        if (res.status === 200) {
+          showToast(`🧹 已清空 ${email} 的收件箱`);
+          await loadAdminAddresses();
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.adminDeleteAddress = async function(id, email) {
+      if (!confirm(`确定要彻底删除邮箱账号 ${email} 及其所有收发邮件吗？此操作不可恢复。`)) return;
+      try {
+        const res = await fetch(`/admin/delete_address/${id}`, { method: "DELETE", headers: adminHeaders() });
+        if (res.status === 200) {
+          showToast(`🗑️ 已彻底删除邮箱账号：${email}`);
+          await loadAdminAddresses();
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    // =========================================================================
+    // ADMIN TAB 3: GLOBAL MAILS & UNKNOWN MAILS AUDIT
+    // =========================================================================
+    window.switchAdminMailSource = async function(src) {
+      adminMailSource = src;
+      adminMailOffset = 0;
+      document.getElementById("btn-admin-mail-all").className = "action-btn" + (src === "all" ? " copy-main" : "");
+      document.getElementById("btn-admin-mail-unknow").className = "action-btn" + (src === "unknow" ? " copy-main" : "");
+      selectedMailId = null;
+      await refreshMails(true);
+    };
+
+    window.changeAdminMailPage = function(dir) {
+      const next = adminMailOffset + dir * ADMIN_MAIL_LIMIT;
+      if (next < 0) return;
+      adminMailOffset = next;
+      const pageNum = Math.floor(adminMailOffset / ADMIN_MAIL_LIMIT) + 1;
+      document.getElementById("admin-mail-page-info").textContent = `第 ${pageNum} 页`;
+      refreshMails(true);
+    };
+
+    // =========================================================================
+    // ADMIN TAB 4: SENDBOX & SEND ACCESS PERMISSIONS
+    // =========================================================================
+    window.loadAdminSendbox = async function() {
+      if (!adminAuth) return;
+      const addrFilter = (document.getElementById("admin-sendbox-filter")?.value || "").trim();
+      const tbody = document.getElementById("admin-sendbox-tbody");
+      try {
+        const url = `/admin/sendbox?limit=50&offset=0${addrFilter ? `&address=${encodeURIComponent(addrFilter)}` : ""}`;
+        const res = await fetch(url, { headers: adminHeaders() });
+        if (res.status !== 200) return;
+        const data = await res.json();
+        adminSendboxCache = data.results || [];
+        document.getElementById("admin-sendbox-badge").textContent = data.count ?? adminSendboxCache.length;
+        tbody.innerHTML = "";
+        if (adminSendboxCache.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--muted);">暂无发件箱记录</td></tr>`;
+          return;
+        }
+        adminSendboxCache.forEach((item, idx) => {
+          const tr = document.createElement("tr");
+          const snippet = String(item.raw || "").replace(/\s+/g, " ").slice(0, 110);
+          tr.innerHTML = `
+            <td style="font-family:ui-monospace,monospace;color:var(--muted);">#${item.id}</td>
+            <td style="font-family:ui-monospace,monospace;font-weight:700;color:var(--blue);">${escapeHtml(item.address || "")}</td>
+            <td style="font-variant-numeric:tabular-nums;">${escapeHtml((item.created_at || "").replace("T", " ").slice(0, 16))}</td>
+            <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--secondary);">${escapeHtml(snippet)}</td>
+            <td>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="mini-btn blue" onclick="viewAdminSendboxRaw(${idx})">📄 查看全文</button>
+                <button type="button" class="mini-btn red" onclick="deleteAdminSendboxItem(${item.id})">🗑️ 删除</button>
+              </div>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.viewAdminSendboxRaw = function(idx) {
+      const item = adminSendboxCache[idx];
+      if (!item) return;
+      let display = item.raw || "";
+      try {
+        const parsed = JSON.parse(item.raw);
+        display = JSON.stringify(parsed, null, 2);
+      } catch (_) {}
+      document.getElementById("admin-raw-modal-pre").textContent = display;
+      document.getElementById("admin-raw-modal").hidden = false;
+    };
+
+    window.deleteAdminSendboxItem = async function(id) {
+      if (!confirm(`确定删除发件记录 #${id} 吗？`)) return;
+      try {
+        const res = await fetch(`/admin/sendbox/${id}`, { method: "DELETE", headers: adminHeaders() });
+        if (res.status === 200) {
+          showToast("🗑️ 发件记录已删除");
+          await loadAdminSendbox();
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.loadAdminSenders = async function() {
+      if (!adminAuth) return;
+      const tbody = document.getElementById("admin-sender-tbody");
+      try {
+        const res = await fetch("/admin/address_sender?limit=50&offset=0", { headers: adminHeaders() });
+        if (res.status !== 200) return;
+        const data = await res.json();
+        const list = data.results || [];
+        document.getElementById("admin-sender-badge").textContent = data.count ?? list.length;
+        tbody.innerHTML = "";
+        if (list.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted);">暂无发信权限申请记录（管理员可直接使用右上角「管理员发信」无限制发信）</td></tr>`;
+          return;
+        }
+        list.forEach(item => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>#${item.id}</td>
+            <td style="font-family:ui-monospace,monospace;font-weight:700;">${escapeHtml(item.address)}</td>
+            <td>
+              <input type="checkbox" id="snd-en-${item.id}" ${item.enabled ? "checked" : ""} style="width:16px;height:16px;">
+              <span style="font-size:12px;">${item.enabled ? "✅ 已启用" : "❌ 禁用"}</span>
+            </td>
+            <td>
+              <input type="number" id="snd-bal-${item.id}" value="${item.balance ?? 0}" style="width:85px;height:28px;border-radius:7px;border:1px solid var(--line);padding:0 6px;">
+            </td>
+            <td>${escapeHtml((item.created_at || "").slice(0, 16))}</td>
+            <td>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="mini-btn green" onclick="updateAdminSender(${item.id}, '${escapeHtml(item.address)}')">💾 保存</button>
+                <button type="button" class="mini-btn red" onclick="deleteAdminSender(${item.id})">🗑️ 删除</button>
+              </div>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.updateAdminSender = async function(id, address) {
+      const enabled = document.getElementById(`snd-en-${id}`).checked;
+      const balance = Number(document.getElementById(`snd-bal-${id}`).value) || 0;
+      try {
+        const res = await fetch("/admin/address_sender", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ address, address_id: id, enabled, balance })
+        });
+        if (res.status === 200) {
+          showToast(`✅ 已更新 ${address} 的发信权限与额度`);
+          await loadAdminSenders();
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.deleteAdminSender = async function(id) {
+      try {
+        const res = await fetch(`/admin/address_sender/${id}`, { method: "DELETE", headers: adminHeaders() });
+        if (res.status === 200) {
+          showToast("🗑️ 已删除该发信权限规则");
+          await loadAdminSenders();
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    // =========================================================================
+    // ADMIN TAB 5: SECURITY, IP BLACKLIST & ACCOUNT SETTINGS
+    // =========================================================================
+    window.loadAdminSecuritySettings = async function() {
+      if (!adminAuth) return;
+      try {
+        const [ipRes, accRes] = await Promise.all([
+          fetch("/admin/ip_blacklist/settings", { headers: adminHeaders() }),
+          fetch("/admin/account_settings", { headers: adminHeaders() })
+        ]);
+        if (ipRes.status === 200) {
+          const ipd = await ipRes.json() || {};
+          document.getElementById("ipb-enabled").checked = Boolean(ipd.enabled);
+          document.getElementById("ipb-daily-enable").checked = Boolean(ipd.enableDailyLimit);
+          document.getElementById("ipb-daily-limit").value = ipd.dailyRequestLimit || 100;
+          document.getElementById("ipb-ips").value = (ipd.blacklist || []).join("\n");
+          document.getElementById("ipb-asns").value = (ipd.asnBlacklist || []).join("\n");
+          document.getElementById("ipb-fps").value = (ipd.fingerprintBlacklist || []).join("\n");
+          document.getElementById("ipb-wl-enable").checked = Boolean(ipd.enableWhitelist);
+          document.getElementById("ipb-wl").value = (ipd.whitelist || []).join("\n");
+        }
+        if (accRes.status === 200) {
+          const acc = await accRes.json() || {};
+          document.getElementById("acc-block-list").value = (acc.blockList || []).join("\n");
+          document.getElementById("acc-send-block").value = (acc.sendBlockList || []).join("\n");
+          document.getElementById("acc-from-block").value = (acc.fromBlockList || []).join("\n");
+          document.getElementById("acc-nolimit-send").value = (acc.noLimitSendAddressList || []).join("\n");
+          document.getElementById("acc-verified-list").value = (acc.verifiedAddressList || []).join("\n");
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    function splitLines(id) {
+      return (document.getElementById(id)?.value || "")
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+    }
+
+    window.saveAdminIpBlacklist = async function(e) {
+      e.preventDefault();
+      try {
+        const payload = {
+          enabled: document.getElementById("ipb-enabled").checked,
+          enableDailyLimit: document.getElementById("ipb-daily-enable").checked,
+          dailyRequestLimit: Number(document.getElementById("ipb-daily-limit").value) || 100,
+          blacklist: splitLines("ipb-ips"),
+          asnBlacklist: splitLines("ipb-asns"),
+          fingerprintBlacklist: splitLines("ipb-fps"),
+          enableWhitelist: document.getElementById("ipb-wl-enable").checked,
+          whitelist: splitLines("ipb-wl")
+        };
+        const res = await fetch("/admin/ip_blacklist/settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 200) {
+          showToast("✅ IP 黑名单与每日限流配置已保存生效！");
+        } else {
+          showToast("保存失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.saveAdminAccountSettings = async function(e) {
+      e.preventDefault();
+      try {
+        const payload = {
+          blockList: splitLines("acc-block-list"),
+          sendBlockList: splitLines("acc-send-block"),
+          fromBlockList: splitLines("acc-from-block"),
+          noLimitSendAddressList: splitLines("acc-nolimit-send"),
+          verifiedAddressList: splitLines("acc-verified-list"),
+          emailRuleSettings: {},
+          addressCreationSettings: {}
+        };
+        const res = await fetch("/admin/account_settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 200) {
+          showToast("✅ 收发信拦截规则与外发白名单已保存！");
+        } else {
+          showToast("保存失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    // =========================================================================
+    // ADMIN TAB 6: DATABASE CLEANUP, CRON & WEBHOOK / AI
+    // =========================================================================
+    window.loadAdminMaintenanceSettings = async function() {
+      if (!adminAuth) return;
+      try {
+        const [acRes, whRes, aiRes] = await Promise.all([
+          fetch("/admin/auto_cleanup", { headers: adminHeaders() }),
+          fetch("/admin/mail_webhook/settings", { headers: adminHeaders() }),
+          fetch("/admin/ai_extract/settings", { headers: adminHeaders() })
+        ]);
+        if (acRes.status === 200) {
+          const ac = await acRes.json() || {};
+          document.getElementById("ac-mails-en").checked = Boolean(ac.enableMailsAutoCleanup);
+          document.getElementById("ac-mails-days").value = ac.cleanMailsDays || 30;
+          document.getElementById("ac-unknow-en").checked = Boolean(ac.enableUnknowMailsAutoCleanup);
+          document.getElementById("ac-unknow-days").value = ac.cleanUnknowMailsDays || 7;
+          document.getElementById("ac-inactive-en").checked = Boolean(ac.enableInactiveAddressAutoCleanup);
+          document.getElementById("ac-inactive-days").value = ac.cleanInactiveAddressDays || 30;
+          document.getElementById("ac-empty-en").checked = Boolean(ac.enableEmptyAddressAutoCleanup);
+          document.getElementById("ac-empty-days").value = ac.cleanEmptyAddressDays || 7;
+        }
+        if (whRes.status === 200) {
+          const wh = await whRes.json() || {};
+          document.getElementById("wh-enabled").checked = Boolean(wh.enabled);
+          document.getElementById("wh-url").value = wh.url || "";
+          document.getElementById("wh-method").value = wh.method || "POST";
+          document.getElementById("wh-headers").value = typeof wh.headers === "string" ? wh.headers : JSON.stringify(wh.headers || {}, null, 2);
+          document.getElementById("wh-body").value = typeof wh.body === "string" ? wh.body : JSON.stringify(wh.body || {}, null, 2);
+        }
+        if (aiRes.status === 200) {
+          const ai = await aiRes.json() || {};
+          document.getElementById("ai-allow-en").checked = Boolean(ai.enableAllowList);
+          document.getElementById("ai-allow-list").value = (ai.allowList || []).join("\n");
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.handleAdminManualCleanup = async function(e) {
+      e.preventDefault();
+      const cleanType = document.getElementById("clean-type-select").value;
+      const cleanDays = Number(document.getElementById("clean-days-input").value);
+      if (isNaN(cleanDays) || cleanDays < 0) return;
+      if (!confirm(`确定要立即清理【${cleanType}】中 ${cleanDays} 天前的数据吗？`)) return;
+      try {
+        const res = await fetch("/admin/cleanup", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ cleanType, cleanDays })
+        });
+        if (res.status === 200) {
+          showToast("🧹 数据库清理执行成功！");
+        } else {
+          showToast("清理失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.saveAdminAutoCleanup = async function(e) {
+      e.preventDefault();
+      try {
+        const payload = {
+          enableMailsAutoCleanup: document.getElementById("ac-mails-en").checked,
+          cleanMailsDays: Number(document.getElementById("ac-mails-days").value) || 30,
+          enableUnknowMailsAutoCleanup: document.getElementById("ac-unknow-en").checked,
+          cleanUnknowMailsDays: Number(document.getElementById("ac-unknow-days").value) || 7,
+          enableInactiveAddressAutoCleanup: document.getElementById("ac-inactive-en").checked,
+          cleanInactiveAddressDays: Number(document.getElementById("ac-inactive-days").value) || 30,
+          enableEmptyAddressAutoCleanup: document.getElementById("ac-empty-en").checked,
+          cleanEmptyAddressDays: Number(document.getElementById("ac-empty-days").value) || 7
+        };
+        const res = await fetch("/admin/auto_cleanup", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 200) {
+          showToast("✅ 定时自动清理策略已保存！");
+        } else {
+          showToast("保存失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    function getWebhookPayloadFromForm() {
+      return {
+        enabled: document.getElementById("wh-enabled").checked,
+        url: document.getElementById("wh-url").value.trim(),
+        method: document.getElementById("wh-method").value.trim() || "POST",
+        headers: document.getElementById("wh-headers").value.trim() || "{}",
+        body: document.getElementById("wh-body").value.trim() || "{}"
+      };
+    }
+
+    window.saveAdminWebhookSettings = async function(e) {
+      e.preventDefault();
+      try {
+        const res = await fetch("/admin/mail_webhook/settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(getWebhookPayloadFromForm())
+        });
+        if (res.status === 200) {
+          showToast("✅ 全局邮件 Webhook 配置已保存！");
+        } else {
+          showToast("保存失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.testAdminWebhook = async function() {
+      try {
+        const res = await fetch("/admin/mail_webhook/test", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(getWebhookPayloadFromForm())
+        });
+        if (res.status === 200) {
+          showToast("🧪 测试 Webhook 已成功发送！");
+        } else {
+          showToast("测试失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    window.saveAdminAiExtractSettings = async function(e) {
+      e.preventDefault();
+      try {
+        const payload = {
+          enableAllowList: document.getElementById("ai-allow-en").checked,
+          allowList: splitLines("ai-allow-list")
+        };
+        const res = await fetch("/admin/ai_extract/settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 200) {
+          showToast("✅ 智能提取设置已保存！");
+        }
+      } catch (err) {
+        showToast(err.message);
       }
     };
 
@@ -2784,8 +3622,14 @@
         let url = "/api/parsed_mails?limit=30&offset=0";
         const headers = { "x-custom-auth": siteAuth };
         if (currentMode === "admin") {
-          if (!adminAuth) return;
-          url = "/admin/parsed_mails?limit=50&offset=0";
+          if (!adminAuth || currentAdminTab !== "mails") return;
+          const addrQ = (document.getElementById("admin-mail-address-query")?.value || "").trim();
+          const normalizedAddr = addrQ ? normalizeEmailAddress(addrQ) : "";
+          if (adminMailSource === "unknow") {
+            url = `/admin/parsed_mails_unknow?limit=${ADMIN_MAIL_LIMIT}&offset=${adminMailOffset}`;
+          } else {
+            url = `/admin/parsed_mails?limit=${ADMIN_MAIL_LIMIT}&offset=${adminMailOffset}${normalizedAddr ? `&address=${encodeURIComponent(normalizedAddr)}` : ""}`;
+          }
           headers["x-admin-auth"] = adminAuth;
         } else {
           const mb = getCurrentActiveMailbox();
@@ -3021,34 +3865,62 @@
       const btn = document.getElementById("c-send-btn");
       if (!from || !to || !subject || !body) return;
 
-      if (!adminAuth) {
-        const promptPass = prompt("对外发信需验证后台管理员密码：");
-        if (!promptPass) return;
-        adminAuth = promptPass;
-      }
+      const mb = getCurrentActiveMailbox();
+      const isHtml = body.includes("<");
+      const content = isHtml ? body : `<div style="font-family:sans-serif;line-height:1.6;white-space:pre-wrap;">${escapeHtml(body)}</div>`;
 
       btn.disabled = true;
       try {
-        const res = await fetch("/admin/send_mail_by_binding", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-custom-auth": siteAuth,
-            "x-admin-auth": adminAuth
-          },
-          body: JSON.stringify({
-            from: { name: from.split("@")[0], email: from },
-            to: [to],
-            subject,
-            html: body.includes("<") ? body : `<div style="font-family:sans-serif;line-height:1.6;white-space:pre-wrap;">${escapeHtml(body)}</div>`,
-            text: body
-          })
-        });
+        let res;
+        if (currentMode === "admin" || adminAuth) {
+          res = await fetch("/admin/send_mail", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-custom-auth": siteAuth,
+              "x-admin-auth": adminAuth
+            },
+            body: JSON.stringify({
+              from_name: from.split("@")[0],
+              from_mail: from,
+              to_name: to.split("@")[0],
+              to_mail: to,
+              subject,
+              content,
+              is_html: true
+            })
+          });
+        } else if (mb && mb.jwt) {
+          res = await fetch("/api/send_mail", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-custom-auth": siteAuth,
+              "Authorization": `Bearer ${mb.jwt}`
+            },
+            body: JSON.stringify({
+              from_name: from.split("@")[0],
+              to_name: to.split("@")[0],
+              to_mail: to,
+              subject,
+              content,
+              is_html: true
+            })
+          });
+        } else {
+          showToast("请先登录邮箱或解锁管理后台后再发信");
+          return;
+        }
+
         if (res.status === 200) {
           showToast("✅ 邮件已成功发送！");
           document.getElementById("compose-modal").hidden = true;
+          document.getElementById("c-to").value = "";
           document.getElementById("c-subject").value = "";
           document.getElementById("c-body").value = "";
+          if (currentMode === "admin" && currentAdminTab === "sendbox") {
+            await loadAdminSendbox();
+          }
         } else {
           const msg = await res.text();
           showToast(`发送失败: ${msg}`);
