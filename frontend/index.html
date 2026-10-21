@@ -1541,30 +1541,44 @@
             </div>
           </section>
 
-          <!-- Quick Navigation & Core Mailbox Shortcut Card -->
+          <!-- Site Access Password Gate Switch & Quick Navigation Card -->
           <section class="admin-panel-card liquid" style="margin:0;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
               <div>
-                <h3 style="margin:0;font-size:16.5px;font-weight:700;">⚡ 核心运维快捷入口</h3>
-                <p style="margin:4px 0 0;font-size:12px;color:var(--secondary);">一键跳转常用管理功能或直接切入核心邮箱</p>
+                <h3 style="margin:0;font-size:16.5px;font-weight:700;">🔐 前端访问密码门禁开关 (Site Access Gate)</h3>
+                <p style="margin:4px 0 0;font-size:12px;color:var(--secondary);">随时一键开启/关闭进入邮箱主页前的「前端通行密码」拦截，或修改密码</p>
               </div>
+              <span class="mode-pill-tag green" id="site-gate-status-badge">读取中...</span>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:14px;">
-              <button type="button" class="action-btn" style="justify-content:flex-start;padding:12px 14px;" onclick="switchAdminTab('addresses')">
+
+            <form onsubmit="saveAdminSiteGate(event)" style="margin-top:12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.68);border:1px solid var(--line);">
+              <div class="switch-row" style="margin-bottom:10px;">
+                <span>启用前端访问密码门禁（关闭时访客免站点密码直接进入主页）</span>
+                <input type="checkbox" id="sg-enabled-chk" style="width:18px;height:18px;">
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <div class="glass-input-wrap" style="flex:1;height:38px;border-radius:11px;background:#fff;">
+                  <input type="text" id="sg-password-input" class="glass-input" style="height:36px;font-size:13px;" placeholder="设置前端访问密码 (如 111)" value="111" required>
+                </div>
+                <button type="submit" class="primary-btn" style="padding:8px 16px;border-radius:11px;font-size:12.5px;">
+                  💾 保存开关与密码
+                </button>
+              </div>
+            </form>
+
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px;">
+              <button type="button" class="action-btn" style="justify-content:flex-start;padding:9px 12px;font-size:12px;" onclick="switchAdminTab('addresses')">
                 <span>👥 管理所有邮箱地址与改密</span>
               </button>
-              <button type="button" class="action-btn" style="justify-content:flex-start;padding:12px 14px;" onclick="switchAdminTab('mails')">
+              <button type="button" class="action-btn" style="justify-content:flex-start;padding:9px 12px;font-size:12px;" onclick="switchAdminTab('mails')">
                 <span>📬 审计全域名与无主邮件</span>
               </button>
-              <button type="button" class="action-btn" style="justify-content:flex-start;padding:12px 14px;" onclick="switchAdminTab('security')">
+              <button type="button" class="action-btn" style="justify-content:flex-start;padding:9px 12px;font-size:12px;" onclick="switchAdminTab('security')">
                 <span>🛡️ 配置 IP 黑名单与收发拦截</span>
               </button>
-              <button type="button" class="action-btn" style="justify-content:flex-start;padding:12px 14px;" onclick="switchAdminTab('maintenance')">
+              <button type="button" class="action-btn" style="justify-content:flex-start;padding:9px 12px;font-size:12px;" onclick="switchAdminTab('maintenance')">
                 <span>🧹 清理历史数据与配置 Webhook</span>
               </button>
-            </div>
-            <div style="margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(8,120,237,.07);border:1px solid rgba(8,120,237,.2);font-size:12px;color:var(--secondary);line-height:1.6;">
-              💡 <strong>提示</strong>：在「👥 邮箱账号管理」列表中，您可以随时查看任意邮箱的收件数、一键复制其 JWT 凭证、直接重置任意邮箱的独立登录密码，或点击「🚀 切入邮箱」直接进入该邮箱收发信。
             </div>
           </section>
         </div>
@@ -2804,11 +2818,25 @@
     window.loadAdminOverview = async function() {
       if (!adminAuth) return;
       try {
-        const [statRes, cfgRes, bfRes] = await Promise.all([
+        const [statRes, cfgRes, bfRes, sgRes] = await Promise.all([
           fetch("/admin/statistics", { headers: adminHeaders() }),
           fetch("/admin/worker/configs", { headers: adminHeaders() }),
-          fetch("/admin/security_guard/status", { headers: adminHeaders() }).catch(() => null)
+          fetch("/admin/security_guard/status", { headers: adminHeaders() }).catch(() => null),
+          fetch("/admin/site_gate/settings", { headers: adminHeaders() }).catch(() => null)
         ]);
+
+        if (sgRes && sgRes.status === 200) {
+          const sg = await sgRes.json();
+          const chk = document.getElementById("sg-enabled-chk");
+          const inp = document.getElementById("sg-password-input");
+          const badge = document.getElementById("site-gate-status-badge");
+          if (chk) chk.checked = Boolean(sg.enabled);
+          if (inp) inp.value = sg.password || "111";
+          if (badge) {
+            badge.className = "mode-pill-tag " + (sg.enabled ? "blue" : "green");
+            badge.textContent = sg.enabled ? `🔒 已启用密码 (${sg.password})` : "🔓 当前免前端密码直入";
+          }
+        }
 
         if (statRes && statRes.status === 200) {
           const st = await statRes.json();
@@ -2876,6 +2904,29 @@
         }
       } catch (err) {
         console.error(err);
+      }
+    };
+
+    window.saveAdminSiteGate = async function(e) {
+      e.preventDefault();
+      const enabled = document.getElementById("sg-enabled-chk").checked;
+      const password = document.getElementById("sg-password-input").value.trim() || "111";
+      try {
+        const res = await fetch("/admin/site_gate/settings", {
+          method: "POST",
+          headers: adminHeaders(true),
+          body: JSON.stringify({ enabled, password })
+        });
+        if (res.status === 200) {
+          siteAuth = password;
+          localStorage.setItem("cf_mail_site_auth", password);
+          showToast(enabled ? `🔒 已启用前端访问密码门禁 (密码: ${password})` : "🔓 已关闭前端访问密码门禁，访客可直接进入主页！");
+          await loadAdminOverview();
+        } else {
+          showToast("保存失败: " + await res.text());
+        }
+      } catch (err) {
+        showToast(err.message);
       }
     };
 
@@ -3617,7 +3668,6 @@
     };
 
     window.refreshMails = async function(manual = false) {
-      if (!siteAuth) return;
       try {
         let url = "/api/parsed_mails?limit=30&offset=0";
         const headers = { "x-custom-auth": siteAuth };
@@ -3964,13 +4014,38 @@
       }, 1000);
     }
 
-    applyLang();
-    if (siteAuth) {
-      enterMainApp();
-    } else {
+    async function initApp() {
+      applyLang();
+      try {
+        const res = await fetch("/open_api/site_gate_status", { cache: "no-store" });
+        if (res.status === 200) {
+          const data = await res.json();
+          if (!data.enabled) {
+            await enterMainApp();
+            return;
+          }
+        }
+      } catch (_) {}
+
+      if (siteAuth) {
+        try {
+          const hashed = await sha256Hex(siteAuth);
+          const vRes = await fetch("/open_api/site_login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: hashed, cf_token: "" })
+          });
+          if (vRes.status === 200) {
+            await enterMainApp();
+            return;
+          }
+        } catch (_) {}
+      }
       document.getElementById("site-gate").hidden = false;
       document.getElementById("app-main").hidden = true;
     }
+
+    initApp();
   })();
   </script>
 </body>
